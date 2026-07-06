@@ -18,7 +18,9 @@ def light_config():
 
     conf.model.layer_policy = 1
     conf.model.layer_value = 1
-    conf.model.d_model = 16
+    conf.model.d_embed = 16
+    conf.model.d_ffn = 16
+    conf.model.dropout = 0.1
     conf.model.nhead = 2
     conf.model.vocab_size = 100
 
@@ -27,7 +29,6 @@ def light_config():
     conf.training.epochs_per_update = 1
     conf.training.replay_buffer_size = 100
 
-    conf.env.env_num = 2
     conf.evalu.memget_num_per_update = 8
 
     return conf

@@ -1,253 +1,234 @@
-import os
 import math
-import random
+from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
-from torch.nn import functional as F
+import torch.nn.functional as F
 
 
-def set_seeds(seed: int | None = None) -> None:
-    if seed is None:
-        seed = sum([int(os.urandom(1)[0]) for _ in range(os.urandom(1)[0])])
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+class RotaryEmbedding(nn.Module):
+    """Build RoPE cosine and sine tensors for attention heads."""
+
+    def __init__(self, dim: int, base: float = 10000.0) -> None:
+        super().__init__()
+        if dim % 2 != 0:
+            raise ValueError("RoPE requires head_dim to be even.")
+
+        inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(
+        self,
+        L: int,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return RoPE tensors with shape [1, 1, L, D/2]."""
+        positions = torch.arange(L, device=device, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(positions, self.inv_freq.to(device))
+
+        cos = freqs.cos().to(dtype)[None, None, :, :]
+        sin = freqs.sin().to(dtype)[None, None, :, :]
+        return cos, sin
 
 
-class CfgNode:
-    """a lightweight configuration class inspired by yacs"""
+def apply_rope(
+    x: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+) -> torch.Tensor:
+    x_even = x[..., ::2]
+    x_odd = x[..., 1::2]
 
-    # TODO: convert to subclass from a dict like in yacs?
-    # TODO: implement freezing to prevent shooting of own foot
-    # TODO: additional existence/override checks when reading/writing params?
+    x_rotated = torch.stack(
+        (
+            x_even * cos - x_odd * sin,
+            x_even * sin + x_odd * cos,
+        ),
+        dim=-1,
+    )
 
-    def __init__(self, **kwargs):
-        self.__dict__.update(kwargs)
-
-    def __str__(self):
-        return self._str_helper(0)
-
-    def _str_helper(self, indent):
-        """need to have a helper to support nested indentation for pretty printing"""
-        parts = []
-        for k, v in self.__dict__.items():
-            if isinstance(v, CfgNode):
-                parts.append("%s:\n" % k)
-                parts.append(v._str_helper(indent + 1))
-            else:
-                parts.append("%s: %s\n" % (k, v))
-        parts = [" " * (indent * 4) + p for p in parts]
-        return "".join(parts)
-
-    def to_dict(self):
-        """return a dict representation of the config"""
-        return {
-            k: v.to_dict() if isinstance(v, CfgNode) else v
-            for k, v in self.__dict__.items()
-        }
-
-    def merge_from_dict(self, d):
-        self.__dict__.update(d)
-
-
-class NewGELU(nn.Module):
-    """
-    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
-    Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
-    """
-
-    def forward(self, x):
-        return (
-            0.5
-            * x
-            * (
-                1.0
-                + torch.tanh(
-                    math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))
-                )
-            )
-        )
+    return x_rotated.flatten(-2)
 
 
 class CausalSelfAttention(nn.Module):
-    """
-    A vanilla multi-head masked self-attention layer with a projection at the end.
-    It is possible to use torch.nn.MultiheadAttention here but I am including an
-    explicit implementation here to show that there is nothing too scary here.
-    """
+    """Multi-head self-attention with RoPE."""
 
-    def __init__(self, config):
+    def __init__(
+        self,
+        d_embed: int,
+        nhead: int,
+        dropout: float,
+        causal: bool = True,
+    ) -> None:
         super().__init__()
-        assert config.n_embd % config.n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
-        # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
-        # regularization
-        self.attn_dropout = nn.Dropout(config.attn_pdrop)
-        self.resid_dropout = nn.Dropout(config.resid_pdrop)
-        # causal mask to ensure that attention is only applied to the left in the input sequence
-        self.register_buffer(
-            "bias",
-            torch.tril(torch.ones(config.block_size, config.block_size)).view(
-                1, 1, config.block_size, config.block_size
-            ),
-        )
-        self.n_head = config.n_head
-        self.n_embd = config.n_embd
+        if d_embed % nhead != 0:
+            raise ValueError("d_embed must be divisible by nhead.")
 
-    def forward(self, x):
-        B, T, C = (
-            x.size()
-        )  # batch size, sequence length, embedding dimensionality (n_embd)
+        self.nhead = nhead
+        self.head_dim = d_embed // nhead
+        self.causal = causal
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(
-            1, 2
-        )  # (B, nh, T, hs)
+        self.qkv = nn.Linear(d_embed, 3 * d_embed, bias=False)
+        self.out_proj = nn.Linear(d_embed, d_embed, bias=False)
+        self.attn_dropout = nn.Dropout(dropout)
+        self.resid_dropout = nn.Dropout(dropout)
+        self.rope = RotaryEmbedding(self.head_dim)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:, :, :T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
-        y = att @ v  # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = (
-            y.transpose(1, 2).contiguous().view(B, T, C)
-        )  # re-assemble all head outputs side by side
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Apply self-attention to x with optional padding mask."""
+        B, L, C = x.shape
 
-        # output projection
-        y = self.resid_dropout(self.c_proj(y))
+        qkv = self.qkv(x)  # [B, L, 3C]
+        qkv = qkv.view(B, L, 3, self.nhead, self.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)  # [3, B, H, L, D]
+        q, k, v = qkv.unbind(dim=0)  # [B, H, L, D]
+
+        cos, sin = self.rope(L, x.device, x.dtype)
+        q = apply_rope(q, cos, sin)  # [B, H, L, D]
+        k = apply_rope(k, cos, sin)  # [B, H, L, D]
+
+        scores = q @ k.transpose(-2, -1)  # [B, H, L, L]
+        scores = scores / math.sqrt(self.head_dim)
+
+        mask_value = torch.finfo(scores.dtype).min
+
+        if self.causal:
+            causal_mask = torch.ones(L, L, device=x.device, dtype=torch.bool).tril()
+            scores = scores.masked_fill(~causal_mask[None, None, :, :], mask_value)
+
+        if attention_mask is not None:
+            key_mask = attention_mask[:, None, None, :].bool()
+            scores = scores.masked_fill(~key_mask, mask_value)
+
+        attn = F.softmax(scores, dim=-1)  # [B, H, L, L]
+        attn = self.attn_dropout(attn)
+
+        y = attn @ v  # [B, H, L, D]
+        y = y.transpose(1, 2).contiguous().view(B, L, C)  # [B, L, C]
+        y = self.out_proj(y)  # [B, L, C]
+        y = self.resid_dropout(y)  # [B, L, C]
+
         return y
 
 
-class Block(nn.Module):
-    """an unassuming Transformer block"""
+class FeedForward(nn.Module):
+    """Position-wise feed-forward network."""
 
-    def __init__(self, config):
+    def __init__(
+        self,
+        d_embed: int,
+        d_ffn: int,
+        dropout: float,
+    ) -> None:
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd)
-        self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd)
-        self.mlp = nn.ModuleDict(
-            dict(
-                c_fc=nn.Linear(config.n_embd, 4 * config.n_embd),
-                c_proj=nn.Linear(4 * config.n_embd, config.n_embd),
-                act=NewGELU(),
-                dropout=nn.Dropout(config.resid_pdrop),
-            )
+        self.net = nn.Sequential(
+            nn.Linear(d_embed, d_ffn),
+            nn.GELU(),
+            nn.Linear(d_ffn, d_embed),
+            nn.Dropout(dropout),
         )
-        m = self.mlp
-        self.mlpf = lambda x: m.dropout(m.c_proj(m.act(m.c_fc(x))))  # MLP forward
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlpf(self.ln_2(x))
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply feed-forward transformation."""
+        return self.net(x)
+
+
+class GPTBlock(nn.Module):
+    """Pre-norm GPT block with RoPE attention and GELU MLP."""
+
+    def __init__(
+        self,
+        d_embed: int,
+        d_ffn: int,
+        dropout: float,
+        nhead: int,
+        causal: bool = True,
+    ) -> None:
+        super().__init__()
+        self.ln_1 = nn.LayerNorm(d_embed)
+        self.attn = CausalSelfAttention(d_embed, nhead, dropout, causal)
+        self.ln_2 = nn.LayerNorm(d_embed)
+        self.ffn = FeedForward(d_embed, d_ffn, dropout)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Apply one Transformer block."""
+        x = x + self.attn(self.ln_1(x), attention_mask)  # [B, L, C]
+        x = x + self.ffn(self.ln_2(x))  # [B, L, C]
         return x
 
 
 class GPTModel(nn.Module):
-    """GPT Language Model"""
+    """GPT-style model that maps token sequences to per-token raw logits."""
 
-    @staticmethod
-    def get_default_config():
-        C = CfgNode()
-        # either model_type or (n_layer, n_head, n_embd) must be given in the config
-        C.model_type = "gpt"
-        C.n_layer = None
-        C.n_head = None
-        C.n_embd = None
-        # these options must be filled in externally
-        C.vocab_size = None
-        C.block_size = None
-        # dropout hyperparameters
-        C.embd_pdrop = 0.1
-        C.resid_pdrop = 0.1
-        C.attn_pdrop = 0.1
-
-        C.out_size = 512
-        return C
-
-    def __init__(self, config):
+    def __init__(
+        self,
+        layer_num: int,
+        vocab_size: int,
+        d_embed: int,
+        d_ffn: int,
+        dropout: float,
+        nhead: int,
+        out_size: Optional[int] = None,
+        causal: bool = True,
+    ) -> None:
         super().__init__()
-        assert config.vocab_size is not None
-        assert config.block_size is not None
 
-        assert config.out_size is not None
-        self.block_size = config.block_size
+        self.vocab_size = vocab_size
+        self.d_embed = d_embed
+        self.out_size = out_size if out_size is not None else vocab_size
 
-        params_given = all(
+        self.token_embed = nn.Embedding(vocab_size, d_embed)
+        self.drop = nn.Dropout(dropout)
+
+        self.blocks = nn.ModuleList(
             [
-                config.n_layer is not None,
-                config.n_head is not None,
-                config.n_embd is not None,
+                GPTBlock(
+                    d_embed=d_embed,
+                    d_ffn=d_ffn,
+                    dropout=dropout,
+                    nhead=nhead,
+                    causal=causal,
+                )
+                for _ in range(layer_num)
             ]
         )
-        assert params_given  # exactly one of these (XOR)
 
-        self.transformer = nn.ModuleDict(
-            dict(
-                wte=nn.Embedding(config.vocab_size, config.n_embd),
-                wpe=nn.Embedding(config.block_size, config.n_embd),
-                drop=nn.Dropout(config.embd_pdrop),
-                h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                ln_f=nn.LayerNorm(config.n_embd),
-            )
-        )
-        self.lm_head = nn.Linear(config.n_embd, config.out_size, bias=False)
+        self.ln_f = nn.LayerNorm(d_embed)
+        self.head = nn.Linear(d_embed, self.out_size)
 
-        # init all weights, and apply a special scaled init to the residual projections, per GPT-2 paper
         self.apply(self._init_weights)
-        for pn, p in self.named_parameters():
-            if pn.endswith("c_proj.weight"):
-                torch.nn.init.normal_(
-                    p, mean=0.0, std=0.02 / math.sqrt(2 * config.n_layer)
-                )
 
-        # report number of parameters (note we don't count the decoder parameters in lm_head)
-        # n_params = sum(p.numel() for p in self.transformer.parameters())
-        # print("number of parameters: %.2fM" % (n_params/1e6,))
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        """Return raw per-token logits with shape [B, L, out_size]."""
+        x = self.token_embed(input_ids)  # [B, L, C]
+        x = self.drop(x)  # [B, L, C]
 
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            torch.nn.init.zeros_(module.bias)
-            torch.nn.init.ones_(module.weight)
+        for block in self.blocks:
+            x = block(x, attention_mask)  # [B, L, C]
 
-    def forward(self, idx):
-        device = idx.device
-        b, t = idx.size()
-        assert t <= self.block_size, (
-            f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
-        )
-        pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(
-            0
-        )  # shape (1, t)
+        x = self.ln_f(x)  # [B, L, C]
 
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(
-            pos
-        )  # position embeddings of shape (1, t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
-        x = self.transformer.ln_f(x)
-        logits = self.lm_head(x)
-
+        logits = self.head(x)  # [B, L, out_size]
         return logits
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)

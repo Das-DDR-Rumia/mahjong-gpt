@@ -22,7 +22,7 @@ from torch.amp import autocast, GradScaler
 
 from safetensors.torch import load_file, save_file
 
-from .env.worker import AsyncMahjongEnv
+from .env.async_env import AsyncMahjongEnv
 
 from .env.tokens import TokenList, SEP_ID, HAND_MIN
 
@@ -44,7 +44,6 @@ class Agent:
         self.evc = config.evalu
 
         self.gamma = self.tgc.gamma
-        self.eps_clip = self.tc.clip_epsilon
         self.K_epochs = self.tc.epochs_per_update
         self.weight_policy = self.tc.weight_policy
         self.weight_value = self.tc.weight_value
@@ -64,17 +63,17 @@ class Agent:
         )
         self.amp_scaler = GradScaler(enabled=self.sc.amp_enable)
 
-        pconfig = GPTModel.get_default_config()
-        pconfig.n_layer = self.mc.layer_policy
-        pconfig.n_head = self.mc.nhead
-        pconfig.n_embd = self.mc.d_model
-        pconfig.vocab_size = self.mc.vocab_size
-        pconfig.out_size = 46
-        pconfig.block_size = 512
-
-        self.policy_model = GPTModel(pconfig)
-
-        self.policy_model_old = GPTModel(pconfig)
+        self.policy_model_params = {
+            "layer_num": self.mc.layer_policy,
+            "vocab_size": self.mc.vocab_size,
+            "d_embed": self.mc.d_embed,
+            "d_ffn": self.mc.d_ffn,
+            "dropout": self.mc.dropout,
+            "nhead": self.mc.nhead,
+            "out_size": 46,
+        }
+        self.policy_model = GPTModel(**self.policy_model_params)
+        self.policy_model_old = GPTModel(**self.policy_model_params)
         self.policy_model_old.load_state_dict(self.policy_model.state_dict())
         self.policy_model_old.eval()
 
@@ -82,17 +81,17 @@ class Agent:
             self.policy_model.parameters(), lr=self.tc.lr_policy
         )
 
-        vconfig = GPTModel.get_default_config()
-        vconfig.n_layer = self.mc.layer_value
-        vconfig.n_head = self.mc.nhead
-        vconfig.n_embd = self.mc.d_model
-        vconfig.vocab_size = self.mc.vocab_size
-        vconfig.out_size = 1
-        vconfig.block_size = 512
-
-        self.value_model = GPTModel(vconfig)
-
-        self.value_model_old = GPTModel(vconfig)
+        self.value_model_params = {
+            "layer_num": self.mc.layer_value,
+            "vocab_size": self.mc.vocab_size,
+            "d_embed": self.mc.d_embed,
+            "d_ffn": self.mc.d_ffn,
+            "dropout": self.mc.dropout,
+            "nhead": self.mc.nhead,
+            "out_size": 1,
+        }
+        self.value_model = GPTModel(**self.value_model_params)
+        self.value_model_old = GPTModel(**self.value_model_params)
         self.value_model_old.load_state_dict(self.value_model.state_dict())
         self.value_model_old.eval()
 

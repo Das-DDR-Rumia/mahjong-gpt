@@ -124,6 +124,7 @@ celerybeat.pid
 .venv
 env/
 !test/env/
+!tests/env/
 !src/env/
 venv/
 ENV/
@@ -169,3 +170,5 @@ runs/
 
 *.safetensors
 replay.json
+
+.vscode/

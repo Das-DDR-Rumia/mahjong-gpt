@@ -1,5 +1,5 @@
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Self
 
 import torch
 from pydantic import (
@@ -12,7 +12,7 @@ from pydantic import (
 )
 
 from .schedulers import Scheduler, SchedulerConfig, ConstantScheduler
-from .env.constants import PAD_ID
+from .env.constant import PAD_ID
 
 
 class RewardConfig(BaseModel):
@@ -35,7 +35,6 @@ class TrainingConfig(BaseModel):
     replay_buffer_size: int = 1600
     epochs_per_update: int = 2
     max_update_kl: float = 1
-    clip_epsilon: float = 0.4
     weight_policy: float = 1
     weight_value: float = 1
     sample_trail_count: int = 1600
@@ -91,10 +90,7 @@ class EnvConfig(BaseModel):
     """Environment hyperparameters"""
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
-
-    stable_seed_steps: int = 4
     init_env_seed: int = 31887
-    env_num: int = 10
 
 
 class TargetConfig(BaseModel):
@@ -164,12 +160,11 @@ class ModelConfig(BaseModel):
 
     layer_policy: int = 6
     layer_value: int = 6
-    dim_feedforward: int = 1024
+    vocab_size: int = 46 + 34 + 4 + 1 + 1  # action, hand, player, [SEP], [PAD]
+    d_embed: int = 1024
+    d_ffn: int = 1024
     pad_token_id: int = PAD_ID
     max_seq_len: int = 512
-    vocab_size: int = 46 + 34 + 4 + 1 + 1  # action, hand, player, [SEP], [PAD]
-    max_norm: float = 0.5
-    d_model: int = 1024
     dropout: float = 0.1
     nhead: int = 8
 
@@ -180,7 +175,6 @@ class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     verbose_positive_done_reward: bool = True
-    replay_buffer_file: str = "replay.json"
     device: str = "cuda"
 
     # Use suffix fields for JSON-serializable dtype representation.
@@ -252,8 +246,6 @@ class Config(BaseModel):
     # Keep your original name `evalu`, but accept `eval=...` for compatibility.
     evalu: EvalConfig = Field(default_factory=EvalConfig, alias="eval")
 
-    verbose_first: bool = True
-
     def model_post_init(self, __context: Any) -> None:
         self._sync_episodes()
         self._apply_eval_mode()
@@ -296,11 +288,11 @@ class Config(BaseModel):
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> Config:
+    def from_dict(cls, data: Dict[str, Any]) -> Self:
         return cls.model_validate(data)
 
     @classmethod
-    def from_json(cls, s: str) -> Config:
+    def from_json(cls, s: str) -> Self:
         return cls.from_dict(json.loads(s))
 
 

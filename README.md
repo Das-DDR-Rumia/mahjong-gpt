@@ -1,51 +1,80 @@
-# Riichi Mahjong Bot Based on GPT Model
+# Mahjong-GPT: Riichi Mahjong Bot Based on a GPT-Style Model
 
-[ English | [中文](README_zh.md) ]
+[English | [中文](README_zh.md)]
 
-This project implements a Riichi Mahjong intelligent agent based on reinforcement learning, using deep policy gradient methods (PPO algorithm) and GPT models for decision learning.
+Mahjong-GPT is an experimental Riichi Mahjong reinforcement-learning project.
+
+## Current Status and Caveats
+
+- **Training algorithm**: the codebase is organized around a PPO-Penalty policy/value update.
+- **Rules and scoring**: the environment integrates hand calculation, action masks, calls, Ron/Tsumo, riichi, dora, and reward shaping. Add focused tests for Ron/Tsumo context, open tanyao, claim priority, and multi-ron behavior before relying on rule-level correctness.
+- **Checkpoint resume**: episode checkpoints support practical resume, but trajectory-level exact resume is not guaranteed in every configuration until all runtime state, including agent-local RNG, worker seeds, and AMP scaler state, is saved and restored consistently.
+- **Dependency versions**: `requirements.txt` currently lists dependencies without version pins. For reproducible experiments, create a lock file or pin package versions in your environment.
 
 ## Requirements
 
-- Python 3.14 or higher
-- PyTorch 2.9 or higher
+Recommended baseline:
+
+- Python 3.14 or above
+- PyTorch compatible with your Python version, operating system, and CUDA/CPU setup
+- Packages listed in `requirements.txt`
+
+The default configuration uses `cuda` as the device. On a CPU-only machine, change `system.device` to `cpu` in the pass configuration before running training.
 
 ## Installation
 
 1. Clone the repository:
+
    ```bash
-   git clone https://github.com/marko1616/mahjong_DRL
+   git clone https://github.com/marko1616/mahjong-gpt.git
+   cd mahjong-gpt
    ```
 
-2. Enter the project directory:
+2. Create and activate a virtual environment:
+
    ```bash
-   cd mahjong_DRL
+   python -m venv .venv
+   source .venv/bin/activate
    ```
 
-3. Install dependencies:
+   On Windows PowerShell:
+
+   ```powershell
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   ```
+
+3. Install PyTorch for your platform, then install the project dependencies:
+
    ```bash
-   # Install PyTorch according to your OS and CUDA version
-   # See: https://pytorch.org/get-started/locally/
-   
+   # Choose the PyTorch command that matches your OS/CUDA setup:
+   # https://pytorch.org/get-started/locally/
+
    pip install -r requirements.txt
    ```
 
-## CLI Tool
+4. Optional developer tools:
 
-The `cli.py` at the project root provides an interactive command-line tool for managing multi-pass training workflows.
+   ```bash
+   pip install ruff
+   ```
 
-### Core Concepts
+## Quick Start
 
-- **Run**: A complete training experiment identified by `run_id`, containing one or more Passes
-- **Pass**: A training phase with its own config, checkpoints, and state. Can start from scratch or inherit weights from another Pass's checkpoint
-- **Manifest**: Metadata file tracking all Passes' configurations and states within a Run
-
-### Starting the CLI
+Run the interactive training manager:
 
 ```bash
 python cli.py interactive
 ```
 
-You'll be prompted for `root_dir` (model storage root) and `run_id` (run identifier). These can also be preset via environment variables:
+A typical first run is:
+
+```text
+Choose a task: init-run
+Choose a task: run
+```
+
+You can also set the run root and run id with environment variables:
 
 ```bash
 export MAHJONG_GPT_ROOT=/mnt/models/mahjong-gpt
@@ -53,24 +82,37 @@ export MAHJONG_GPT_RUN_ID=model-00
 python cli.py interactive
 ```
 
+## CLI Tool
+
+`cli.py` provides an interactive command-line workflow for multi-pass experiments.
+
+### Core Concepts
+
+- **Run**: a complete experiment identified by `run_id`.
+- **Pass**: one training phase with its own config, checkpoints, logs, and state.
+- **Manifest**: run-level metadata that tracks all passes and the active pass.
+- **Checkpoint**: an episode-level directory containing model and training state used for resume or bootstrapping.
+
 ### Available Tasks
 
-| Task | Description |
-|------|-------------|
-| `status` | Show current Run status (Pass progress, active Pass, etc.) |
-| `init-run` | Initialize a new Run with Manifest and first Pass |
-| `set-active` | Set the active Pass (TrainerRunner starts here) |
-| `append-pass` | Add a new Pass, optionally bootstrapping from existing checkpoint |
-| `edit-config` | Edit Pass config in `$EDITOR` (Pydantic validation) |
-| `reset-pass-state` | Reset Pass state to pending (checkpoints preserved) |
-| `run` | Launch TrainerRunner on the active Pass |
+| Task               | Description                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| `status`           | Show run status, pass progress, active pass, checkpoint pointers, and best metric. |
+| `init-run`         | Initialize a new run with a manifest and first pass.                               |
+| `set-active`       | Select which pass `TrainerRunner` should run.                                      |
+| `append-pass`      | Add a new pass, optionally initialized from another pass checkpoint.               |
+| `edit-config`      | Edit a pass config in `$EDITOR` with Pydantic validation.                          |
+| `reset-pass-state` | Reset a pass state to `pending` without deleting checkpoints.                      |
+| `run`              | Launch training on the active pass.                                                |
+| `ruff-check`       | Run Ruff check on `src/` and `tests/` if Ruff is installed.                        |
+| `ruff-format`      | Run Ruff format on `src/` and `tests/` if Ruff is installed.                       |
+| `pytest-cov`       | Run `pytest --cov=src`.                                                            |
+| `exit`             | Exit the CLI.                                                                      |
 
-### Usage Examples
+### Example: Train, Then Continue With New Hyperparameters
 
-**Scenario: Train from scratch, then continue with new hyperparameters**
-
-```
-# 1. Initialize Run and pass-0
+```text
+# 1. Initialize run and pass-0
 Choose a task: init-run
 Run notes: First experiment
 First pass name: pass-0
@@ -82,9 +124,9 @@ Choose a task: run
 Run active pass 0 now? Yes
 → TrainerRunner begins pass-0
 
-# 3. After pass-0 completes, add pass-1 inheriting weights from pass-0
+# 3. After pass-0 completes, append pass-1
 Choose a task: append-pass
-Config source: Edit JSON in $EDITOR  # modify learning rate, etc.
+Config source: Edit JSON in $EDITOR
 New pass name: pass-1-finetune
 Bootstrap from existing pass checkpoint? Yes
 Select source pass: 0 - pass-0 (completed)
@@ -94,73 +136,123 @@ init_mode: weights_only
 
 # 4. Continue training
 Choose a task: run
-→ TrainerRunner loads pass-0 weights, executes pass-1
+→ TrainerRunner loads pass-0 weights and executes pass-1
 ```
 
-**Scenario: Check training status**
+## Configuration
 
-```
-Choose a task: status
+Configuration lives in `src/config.py` and is built with Pydantic models.
 
-╭─────────────────────────────────────────────────────────╮
-│ Run  run_id=model-00  active_pass_id=1  passes=2        │
-╰─────────────────────────────────────────────────────────╯
-┌─────────┬────────────────┬───────────┬─────────┬──────────┬─────────────┬──────────────────────┬───────────────────────┐
-│ pass_id │ name           │ status    │ curr_ep │ total_ep │ best_metric │ last_ckpt_dir        │ init_from             │
-├─────────┼────────────────┼───────────┼─────────┼──────────┼─────────────┼──────────────────────┼───────────────────────┤
-│ 0       │ pass-0         │ completed │ 1000    │ 1000     │ 0.4521      │ pass_0/ckpt_ep1000   │ -                     │
-│ 1       │ pass-1-finetune│ running   │ 350     │ 500      │ 0.4892      │ pass_1/ckpt_ep350    │ 0:latest (weights_only)│
-└─────────┴────────────────┴───────────┴─────────┴──────────┴─────────────┴──────────────────────┴───────────────────────┘
-```
+Main sections:
+
+| Section          | Purpose                                                                                               |
+| ---------------- | ----------------------------------------------------------------------------------------------------- |
+| `training`       | Replay buffer size, batch/update settings, learning rates, epsilon scheduler, and pass episode count. |
+| `env`            | Environment seed and number of environments.                                                          |
+| `target`         | Return/target calculation settings and schedulers.                                                    |
+| `model`          | GPT-style model dimensions and token vocabulary settings.                                             |
+| `system`         | Device, dtype, AMP options, worker count, and output filenames.                                       |
+| `reward`         | Reward shaping weights and penalties.                                                                 |
+| `eval` / `evalu` | Evaluation-mode behavior.                                                                             |
+
+When editing configs, prefer the CLI `edit-config` task so the result is validated before being saved.
 
 ## Project Structure
 
-```
-cli.py                  # interactive cli tool
+```text
+cli.py                  # Interactive CLI tool
 src/
-├── trainer.py          # Training entry point
-├── agent.py            # PPO algorithm agent implementation
-├── model.py            # GPT model definition (based on minGPT)
-├── config.py           # Hyperparameter configuration (Pydantic-based)
-├── schedulers.py       # Learning rate and parameter schedulers
-├── schemes.py          # Data structures (Trail, ReplayBuffer, etc.)
-├── recorder.py         # Training metrics recording and logging
-├── ckpt_manager.py     # Checkpoint manager (supports resumable training)
-├── utils/
-│   ├── ckpt_utils.py   # Checkpoint utilities (RNG state, atomic writes)
-│   └── stats_utils.py  # Statistical utilities (CI bounds, running stats)
-└── env/
-    ├── env.py          # Main Mahjong environment implementation
-    ├── constants.py    # Action space constants
-    ├── tiles.py        # Tile conversion utilities
-    ├── tokens.py       # Token vocabulary and TokenList class
-    ├── hand.py         # Hand management with shanten calculation
-    ├── player.py       # Player state management
-    ├── wall.py         # Tile wall distribution
-    ├── event_bus.py    # Pub-sub event system
-    └── worker.py       # Async multiprocessing environment wrapper
+├── agent.py            # Policy/value agent and async environment orchestration
+├── ckpt_manager.py     # Run/pass/checkpoint filesystem management
+├── config.py           # Pydantic configuration models
+├── model.py            # GPT-style model definition
+├── recorder.py         # Metrics recording and logging
+├── schedulers.py       # Scheduler implementations
+├── schemes.py          # Data structures such as Trail and ReplayBuffer
+├── trainer.py          # High-level training runner
+├── env/
+│   ├── constants.py    # Action and token id constants
+│   ├── env.py          # Main Mahjong environment
+│   ├── event_bus.py    # Event system
+│   ├── hand.py         # Hand representation and hand-value integration
+│   ├── player.py       # Player state
+│   ├── tiles.py        # Tile conversion utilities
+│   ├── tokens.py       # TokenList and vocabulary helpers
+│   ├── wall.py         # Wall generation and dealing
+│   └── worker.py       # Async multiprocessing environment wrapper
+└── utils/
+    ├── ckpt_utils.py   # Checkpoint utilities and RNG helpers
+    ├── rl_utils.py     # RL math utilities
+    └── stats_utils.py  # Statistics helpers
+
+tests/
+├── test_agent.py
+└── utils/
 ```
 
-## Checkpointing & Resumable Training
+## Action and Token IDs
 
-The project supports a complete checkpointing mechanism that allows resuming training from any checkpoint:
+The environment uses **46 local actions per seat**, indexed from `0` to `45`.
 
-- Checkpoints save model weights, optimizer states, RNG states, and scheduler states
-- Use `CkptManager` to manage multi-pass training
-- Supports atomic writes to prevent checkpoint corruption from crashes
+| Action ID | Name       | Description                                     |
+| --------- | ---------- | ----------------------------------------------- |
+| `0`-`33`  | Discard    | Discard tile by `tile34 = action_id`.           |
+| `34`      | Chi up     | Chi with the discarded tile as the upper tile.  |
+| `35`      | Chi middle | Chi with the discarded tile as the middle tile. |
+| `36`      | Chi down   | Chi with the discarded tile as the lower tile.  |
+| `37`      | Pon        | Pon call.                                       |
+| `38`      | Open kan   | Daiminkan / open kan.                           |
+| `39`      | Added kan  | Shouminkan / added kan.                         |
+| `40`      | Closed kan | Ankan / closed kan.                             |
+| `41`      | Pei        | Reserved for 3-player Mahjong north extraction. |
+| `42`      | Riichi     | Declare riichi.                                 |
+| `43`      | Ron        | Win on another player's discard.                |
+| `44`      | Tsumo      | Win by self-draw.                               |
+| `45`      | Pass       | Decline action or call.                         |
 
-## Action Space
+Token ids used by the sequence model include:
 
-The action space consists of 47 actions (indices 0-46, where 0 is unused padding):
+| Token ID Range | Meaning           |
+| -------------- | ----------------- |
+| `0`-`45`       | Action tokens.    |
+| `46`-`79`      | Hand tile tokens. |
+| `80`-`83`      | Player tokens.    |
+| `84`           | Separator token.  |
+| `85`           | Padding token.    |
 
-| Action ID | Description |
-|-----------|-------------|
-| 1-34      | Discard tile (tile34 = id - 1) |
-| 35-37     | Chi (upper/middle/lower) |
-| 38        | Pon |
-| 39-41     | Kan (open/add/closed) |
-| 42        | Pei (3-player, reserved) |
-| 43        | Riichi |
-| 44        | Ron |
-| 45        | Tsumo |
-| 46        | Pass |
+## Checkpointing and Resume
+
+The training runner writes episode checkpoints under the active run directory. A checkpoint currently includes:
+
+- policy and value model weights;
+- optimizer states;
+- global RNG state;
+- replay buffer contents;
+- scheduler states;
+- episode metrics metadata.
+
+Supported workflows:
+
+- resume a pass from its latest checkpoint;
+- initialize a new pass from an earlier pass with `weights_only` or `full` mode;
+- keep pass metadata in a manifest for multi-stage experiments.
+
+Practical resume is supported. Exact trajectory-level reproducibility still requires saving and restoring every runtime state consistently.
+
+## Testing
+
+Run unit tests:
+
+```bash
+pytest
+```
+
+Run tests with coverage:
+
+```bash
+pytest --cov=src
+```
+
+## License
+
+Apache-2.0

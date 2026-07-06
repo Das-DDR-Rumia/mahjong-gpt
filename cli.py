@@ -178,7 +178,6 @@ def _task_init_run(store: CkptManager) -> None:
         config=cfg,
         total_episodes=total_eps_i,
         save_every=save_every,
-        eval_every=0,
         notes="First pass",
     )
     manifest = store.init_new(first, notes=notes)
@@ -302,7 +301,6 @@ def _task_append_pass(store: CkptManager) -> None:
         config=cfg,
         total_episodes=total_eps,
         save_every=save_every,
-        eval_every=0,
         notes=notes,
         init_from_pass_id=init_from_pass_id,
         init_from_episode=init_from_episode,
@@ -551,6 +549,7 @@ def interactive() -> None:
         except Exception as e:
             console.print(Panel.fit("[red]Task failed[/red]"))
             console.print(str(e))
+            console.print_exception()
 
 
 if __name__ == "__main__":

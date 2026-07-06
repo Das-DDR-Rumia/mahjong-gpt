@@ -26,7 +26,6 @@ class PassSpec(BaseModel):
     config: Config
     total_episodes: int = Field(ge=1)
     save_every: int = Field(default=1, ge=1)
-    eval_every: int = Field(default=0, ge=0)
     notes: str = ""
 
 

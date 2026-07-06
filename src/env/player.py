@@ -7,29 +7,25 @@ from .hand import MahjongHand
 
 @dataclass
 class PlayerState:
-    """Per-player flags and reward-shaping memory."""
-
     riichi: bool = False
-    riichi_lock: bool = (
-        False  # after riichi declaration turn, future discards are locked to drawn tile
-    )
-    has_open_tanyao: bool = False
-    last_drawn: Optional[int] = None  # tile34
-    first_round: bool = True
-    last_shanten: Optional[int] = None
-    last_available: Optional[int] = None
+    riichi_lock: bool = False
+    last_drawn: Optional[int] = None
 
 
 class MahjongPlayer:
-    """
-    A player entity containing concealed hand, melds, discards, and simple state.
-    """
+    """A player entity.  Turn flow is intentionally owned by the engine."""
 
-    def __init__(self, seat: int, bus: EventBus) -> None:
+    def __init__(
+        self,
+        seat: int,
+        bus: Optional[EventBus] = None,
+        player_wind: int = 0,
+    ) -> None:
         self.seat = seat
         self.bus = bus
+        self.player_wind = player_wind
         self.hand = MahjongHand(seat=seat, bus=bus)
-        self.discards: list[int] = []  # tile34 discards not called-away
+        self.discards: list[int] = []
         self.state = PlayerState()
 
     def reset(self) -> None:
@@ -38,26 +34,24 @@ class MahjongPlayer:
         self.state = PlayerState()
 
     def draw(self, tile34: int) -> None:
-        self.hand.add(tile34, 1)
+        self.hand.add(tile34)
         self.state.last_drawn = tile34
-        self.bus.publish("tile_drawn", seat=self.seat, tile34=tile34)
+        if self.bus is not None:
+            self.bus.publish("tile_drawn", seat=self.seat, tile34=tile34)
 
     def discard(self, tile34: int) -> None:
-        self.hand.remove(tile34, 1)
+        self.hand.remove(tile34)
         self.discards.append(tile34)
-        self.bus.publish("tile_discarded", seat=self.seat, tile34=tile34)
+        if self.bus is not None:
+            self.bus.publish("tile_discarded", seat=self.seat, tile34=tile34)
 
     def pop_last_discard_for_call(self, expected_tile34: int) -> None:
-        """
-        Remove the last discard (when it is called by another player).
-        This avoids double-counting tiles between melds and discards.
-        """
         if not self.discards:
             raise RuntimeError("no discard to call")
-        last = self.discards[-1]
-        if last != expected_tile34:
+        actual = self.discards[-1]
+        if actual != expected_tile34:
             raise RuntimeError(
-                f"discard mismatch: last={last}, expected={expected_tile34}"
+                f"discard mismatch: last={actual}, expected={expected_tile34}"
             )
         self.discards.pop()
 

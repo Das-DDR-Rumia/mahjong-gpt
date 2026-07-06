@@ -6,10 +6,13 @@ from mahjong.tile import TilesConverter
 
 
 class MahjongWall:
-    """
-    A standard 136-tile wall.
+    """A 136-tile wall represented internally as tile34 values.
 
-    We store tiles as tile34 indices (0..33) internally.
+    The initial ten dead-wall tiles are retained as dora/ura indicators and
+    four tiles are the initial rinshan supply, matching the original project.
+    On a kan, one live-wall tail tile is moved into the dead-wall replacement
+    area.  This fixes the original wall-length bug without adding new game
+    rules.
     """
 
     def __init__(self, rng: random.Random) -> None:
@@ -17,53 +20,61 @@ class MahjongWall:
         self.live: Deque[int] = deque()
         self.dora_indicators: list[int] = []
         self.rinshan: Deque[int] = deque()
+        self.dead_wall_replacements: list[int] = []
 
     def reset(self) -> None:
-        """Build and shuffle a full wall, then carve out dora indicators and rinshan."""
-        tiles = [i for i in range(34) for _ in range(4)]
+        tiles = [tile for tile in range(34) for _ in range(4)]
         self._rng.shuffle(tiles)
-
-        # match the original behavior: take first 10 as dora indicators, next 4 as rinshan
         self.dora_indicators = tiles[:10]
-        rinshan_list = tiles[10:14]
-        live_list = tiles[14:]
-
-        self.rinshan = deque(rinshan_list)
-        self.live = deque(live_list)
+        self.rinshan = deque(tiles[10:14])
+        self.live = deque(tiles[14:])
+        self.dead_wall_replacements = []
 
     def remaining_live(self) -> int:
         return len(self.live)
 
     def draw(self) -> int:
-        """Draw from live wall."""
         if not self.live:
             raise RuntimeError("live wall is empty")
         return self.live.popleft()
 
     def draw_rinshan(self) -> int:
-        """Draw from rinshan (after kan)."""
+        """Draw a replacement tile and shorten the live wall by one tile."""
         if not self.rinshan:
             raise RuntimeError("rinshan is empty")
-        return self.rinshan.popleft()
+        if not self.live:
+            raise RuntimeError("cannot draw rinshan after live wall exhaustion")
+        tile = self.rinshan.popleft()
+        self.dead_wall_replacements.append(self.live.pop())
+        return tile
 
-    def dora_indicators_136(self, kan_count: int, end: bool, riichi: bool) -> list[int]:
-        """
-        Return dora indicators as 136 array.
-        - omote: first 5
-        - ura: last 5 (only revealed at end if riichi)
-        """
-        inds: list[int] = []
-        for i in range(kan_count + 1):
-            inds.append(self.dora_indicators[i])
+    def dora_indicators_136(
+        self,
+        kan_count: int,
+        end: bool = True,
+        riichi: bool = False,
+    ) -> list[int]:
+        """Return visible dora and, for a riichi winning hand, ura indicators."""
+        if not 0 <= kan_count <= 4:
+            raise ValueError(f"invalid kan count: {kan_count}")
+        shown = kan_count + 1
+        indicator_tiles = self.dora_indicators[:shown]
         if end and riichi:
-            for i in range(kan_count + 1):
-                inds.append(self.dora_indicators[5 + i])
-
+            indicator_tiles = indicator_tiles + self.dora_indicators[5 : 5 + shown]
         counts = [0] * 34
-        for t in inds:
-            counts[t] += 1
+        for tile in indicator_tiles:
+            counts[tile] += 1
         return TilesConverter.to_136_array(counts)
 
     def remaining_tile34_list(self) -> list[int]:
-        """Return remaining live tiles as a list (for reward shaping)."""
+        """Live-wall tiles used by existing reward-shaping semantics."""
         return list(self.live)
+
+    def all_unseen_tile34_list(self) -> list[int]:
+        """All not-yet-held tiles, including dead-wall inventory."""
+        return (
+            list(self.live)
+            + list(self.rinshan)
+            + self.dora_indicators.copy()
+            + self.dead_wall_replacements.copy()
+        )
