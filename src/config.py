@@ -24,7 +24,11 @@ class RewardConfig(BaseModel):
     penalty_ava_num: float = Field(default=1.2)
     score_weight: float = Field(default=0.1)
     reward_riichi: float = Field(default=10.0)
-    reward_open_tanyao: float = Field(default=-5.0)
+    # Retained for old pass configs; blanket open-meld penalties are no longer
+    # applied because calls can secure valuable open yaku.
+    reward_open_tanyao: float = Field(default=0.0)
+    reward_confirmed_yaku_han: float = Field(default=5.0)
+    reward_meld_cap: float = Field(default=20.0)
 
 
 class TrainingConfig(BaseModel):

@@ -291,7 +291,7 @@ class Agent:
             target_length = self.mc.max_seq_len
         if pad_token_id is None:
             pad_token_id = self.mc.pad_token_id
-        if len(lst) >= target_length:
+        if len(lst) > target_length:
             raise ValueError("Value mc.max_seq_len is too low.")
         return lst + [pad_token_id] * (target_length - len(lst))
 
@@ -423,7 +423,9 @@ class Agent:
                 if len(states) != T + 1:
                     continue
 
-                states_ids = [self._state_to_ids(s) for s in states]
+                states_ids = [
+                    self._pad_list_to_length(self._state_to_ids(s)) for s in states
+                ]
 
                 # s_t: [T, L] (truncated to T, excluding terminal state for policy eval usually,
                 # but here s_t includes only T steps for forward pass matching rewards)
@@ -667,6 +669,15 @@ class Agent:
             memories[player_index].rewards.append(float(reward))
             memories[player_index].dones.append(bool(done))
             memories[player_index].info.append(next_info)
+
+            # The scalar reward already belongs to the acting seat.  Point
+            # transfers for the other seats are attached to their most recent
+            # decisions so losses such as dealing in can affect learning.
+            seat_rewards = next_info.get("seat_rewards", ())
+            for seat, seat_reward in enumerate(seat_rewards):
+                if seat == player_index or not memories[seat].rewards:
+                    continue
+                memories[seat].rewards[-1] += float(seat_reward)
 
             if len(memories[player_index].rewards) >= 2:
                 memories[player_index].rewards[-2] += float(

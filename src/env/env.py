@@ -93,14 +93,20 @@ class MahjongEnv:
         self._state, events = self.engine.new_hand(self.wall, self.players)
         self.history_tokens = TokenList.from_ids([PLAYER_TOKENS[self.seat_now]])
         self.bus.publish_many(events)
-        obs, info = self._build_obs_and_info(reward_update=0.0)
+        obs, info = self._build_obs_and_info(
+            reward_update=0.0,
+            seat_rewards=(0.0, 0.0, 0.0, 0.0),
+        )
         return obs, 0.0, self.done, info
 
     def step(self, action: int) -> Tuple[Dict, float, bool, Dict]:
         """Apply exactly one legal decision of the currently active seat."""
         state = self._require_state()
         if self.done:
-            obs, info = self._build_obs_and_info(reward_update=0.0)
+            obs, info = self._build_obs_and_info(
+                reward_update=0.0,
+                seat_rewards=(0.0, 0.0, 0.0, 0.0),
+            )
             return obs, 0.0, True, info
 
         decision = self.engine.legal.analyze(state)
@@ -118,8 +124,12 @@ class MahjongEnv:
             actor=transition.actor,
             events=transition.events,
             discard_snapshot=snapshot,
+            state=state,
         )
-        obs, info = self._build_obs_and_info(reward_update=reward_result.reward_update)
+        obs, info = self._build_obs_and_info(
+            reward_update=reward_result.reward_update,
+            seat_rewards=reward_result.seat_rewards,
+        )
         return obs, reward_result.reward, self.done, info
 
     # Compatibility projections for users who inspected the old environment.
@@ -131,13 +141,18 @@ class MahjongEnv:
     def seat_now(self) -> int:
         return self._require_state().actor_seat
 
-    def _build_obs_and_info(self, reward_update: float) -> Tuple[Dict, Dict]:
+    def _build_obs_and_info(
+        self,
+        reward_update: float,
+        seat_rewards: tuple[float, ...],
+    ) -> Tuple[Dict, Dict]:
         decision: LegalDecision = self.engine.legal.analyze(self._require_state())
         return self.encoder.build(
             self._require_state(),
             self.history_tokens,
             decision,
             reward_update,
+            seat_rewards,
         )
 
     def assert_integrity(self) -> None:

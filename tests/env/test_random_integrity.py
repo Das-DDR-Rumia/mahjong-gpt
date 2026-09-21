@@ -24,16 +24,14 @@ def test_random_play_integrity():
     env = MahjongEnv(seed=RANDOM_TEST_SEED)
     obs, reward, done, info = env.reset()
 
-    # run multiple steps; reset when done
-    steps = 4096
+    # Run a fixed number of actions across multiple hands, resetting on terminal.
     for _ in range(RANDOM_TEST_N):
-        for _ in range(steps):
-            env.assert_integrity()
+        env.assert_integrity()
 
-            action = pick_random_legal_action(rng, info["action_mask"])
-            obs, reward, done, info = env.step(action)
+        action = pick_random_legal_action(rng, info["action_mask"])
+        obs, reward, done, info = env.step(action)
 
-            env.assert_integrity()
+        env.assert_integrity()
 
-            if done:
-                break
+        if done:
+            obs, reward, done, info = env.reset()

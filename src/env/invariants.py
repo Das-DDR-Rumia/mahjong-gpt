@@ -2,6 +2,7 @@ from mahjong.meld import Meld
 
 from .claims import current_offers, same_suit_consecutive
 from .constant import ACTIONS_PER_SEAT, NUM_SEATS
+from .hand import get_meld_type
 from .state import (
     AfterCallDiscardPhase,
     AfterKanPhase,
@@ -84,7 +85,7 @@ def assert_integrity(state: GameState) -> None:
             len(meld.tiles) for meld in player.melds
         )
         kan_melds = sum(
-            1 for meld in player.melds if getattr(meld, "meld_type", None) == Meld.KAN
+            1 for meld in player.melds if get_meld_type(meld) == Meld.KAN
         )
         assert physical == structural + kan_melds
         expected = 13 if expected_current is None or seat != expected_current else 14

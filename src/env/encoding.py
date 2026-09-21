@@ -14,6 +14,7 @@ class ObservationEncoder:
         history: TokenList,
         decision: LegalDecision,
         reward_update: float,
+        seat_rewards: tuple[float, ...],
     ) -> Tuple[Dict, Dict]:
         seat = state.actor_seat
         observation = {
@@ -25,5 +26,6 @@ class ObservationEncoder:
         info = {
             "action_mask": list(decision.mask),
             "reward_update": float(reward_update),
+            "seat_rewards": [float(value) for value in seat_rewards],
         }
         return observation, info

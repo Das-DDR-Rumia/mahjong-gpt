@@ -13,6 +13,11 @@ from .tiles import (
 )
 
 
+def get_meld_type(meld: Meld) -> str | None:
+    """Return the meld kind across supported ``mahjong`` package versions."""
+    return getattr(meld, "type", getattr(meld, "meld_type", None))
+
+
 class MahjongHand:
     """Concealed tile34 counts plus meld records."""
 
@@ -121,7 +126,7 @@ class MahjongHand:
 
     def has_open_pon(self, tile34: int) -> bool:
         for meld in self.melds:
-            if getattr(meld, "meld_type", None) != Meld.PON or not getattr(
+            if get_meld_type(meld) != Meld.PON or not getattr(
                 meld, "opened", False
             ):
                 continue
@@ -132,7 +137,7 @@ class MahjongHand:
     def upgrade_pon_to_kan(self, tile34: int) -> None:
         for index, meld in enumerate(self.melds):
             if (
-                getattr(meld, "meld_type", None) == Meld.PON
+                get_meld_type(meld) == Meld.PON
                 and bool(getattr(meld, "opened", False))
                 and all(tile // 4 == tile34 for tile in meld.tiles)
             ):
@@ -148,7 +153,7 @@ class MahjongHand:
         raise RuntimeError("no matching opened pon to upgrade")
 
     @staticmethod
-    def _meld(meld_type: int, tiles34: Tuple[int, ...], opened: bool) -> Meld:
+    def _meld(meld_type: str, tiles34: Tuple[int, ...], opened: bool) -> Meld:
         counts = [0] * 34
         for tile in tiles34:
             counts[tile] += 1

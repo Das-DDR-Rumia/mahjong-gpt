@@ -5,6 +5,7 @@ import random
 from src.config import Config
 from src.schemes import Trail, ReplayBuffer
 from src.env.env import MahjongEnv
+from src.env.tokens import TokenList
 
 
 @pytest.fixture
@@ -89,6 +90,12 @@ def create_trails_from_env(
             memories[player_index].dones.append(bool(done))
             memories[player_index].info.append(dict(next_info) if next_info else {})
 
+            seat_rewards = next_info.get("seat_rewards", ())
+            for seat, seat_reward in enumerate(seat_rewards):
+                if seat == player_index or not memories[seat].rewards:
+                    continue
+                memories[seat].rewards[-1] += float(seat_reward)
+
             # Apply reward_update to previous step (like get_memory_async)
             if len(memories[player_index].rewards) >= 2:
                 memories[player_index].rewards[-2] += float(
@@ -153,6 +160,59 @@ async def test_agent_get_memory_async(light_config):
     await agent._worker_task(0, agent.workers[0], count=1, call_back=callback)
 
     assert len(agent.replay_buffer) >= initial_buffer_len
+
+    del agent
+
+
+@pytest.mark.asyncio
+async def test_agent_assigns_terminal_seat_rewards_to_each_players_trail(
+    light_config,
+):
+    """Terminal point transfers reach the most recent decision of each seat."""
+    from src.agent import Agent
+
+    class TwoTurnEnv:
+        def __init__(self):
+            self.turn = 0
+
+        @staticmethod
+        def _state(seat):
+            return {
+                "seat": seat,
+                "tokens": TokenList.from_ids([80 + seat]),
+                "hand": [0] * 34,
+            }
+
+        @staticmethod
+        def _info(seat_rewards=None):
+            return {
+                "action_mask": [1] + [0] * 45,
+                "reward_update": 0.0,
+                "seat_rewards": seat_rewards or [0.0] * 4,
+            }
+
+        async def reset(self, seed=None):
+            self.turn = 0
+            return self._state(1), 0.0, False, self._info()
+
+        async def step(self, action):
+            self.turn += 1
+            if self.turn == 1:
+                return self._state(0), 0.0, False, self._info()
+            return (
+                self._state(0),
+                10.0,
+                True,
+                self._info([10.0, -10.0, 0.0, 0.0]),
+            )
+
+    light_config.system.num_workers = 1
+    agent = Agent(light_config)
+
+    await agent.get_memory_async(0, TwoTurnEnv())
+
+    trail_rewards = sorted(trail.total_reward for trail in agent.replay_buffer.buffer)
+    assert trail_rewards == [-10.0, 10.0]
 
     del agent
 

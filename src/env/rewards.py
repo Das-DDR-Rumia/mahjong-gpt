@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Optional
 
 from mahjong.shanten import Shanten
+from mahjong.constants import DRAGONS, EAST
 
 from .constant import DISCARD_MAX, DISCARD_MIN
 from .events import MeldMade, RiichiDeclared, WinRon, WinTsumo
@@ -26,14 +27,24 @@ class DiscardSnapshot:
 class RewardResult:
     reward: float
     reward_update: float
+    seat_rewards: tuple[float, ...]
 
 
 class RewardProjector:
     """Computes rewards after a transition instead of inside game rules."""
 
-    def __init__(self, config: Any, shanten_calc: Shanten, seats: int = 4) -> None:
+    def __init__(
+        self,
+        config: Any,
+        shanten_calc: Shanten,
+        seats: int = 4,
+        dealer_seat: int = 0,
+        round_wind: int = EAST,
+    ) -> None:
         self._config = config
         self._shanten = shanten_calc
+        self._dealer_seat = dealer_seat
+        self._round_wind = round_wind
         self._memory = [RewardMemory() for _ in range(seats)]
 
     def reset(self) -> None:
@@ -63,34 +74,62 @@ class RewardProjector:
         actor: int,
         events: Iterable[object],
         discard_snapshot: Optional[DiscardSnapshot],
+        state: Optional[GameState] = None,
     ) -> RewardResult:
-        immediate = 0.0
+        seat_rewards = [0.0 for _ in self._memory]
         reward_update = self._project_discard(discard_snapshot)
 
         for event in events:
             if isinstance(event, RiichiDeclared) and event.seat == actor:
-                immediate += float(self._get("reward_riichi", 0.0))
-            elif (
-                isinstance(event, MeldMade)
-                and event.seat == actor
-                and event.kind
-                in {
-                    "chi",
-                    "pon",
-                    "minkan",
-                }
-            ):
-                immediate += float(self._get("reward_open_tanyao", 0.0))
+                seat_rewards[event.seat] += float(self._get("reward_riichi", 0.0))
+            elif isinstance(event, MeldMade) and event.seat == actor:
+                seat_rewards[event.seat] += self._confirmed_meld_reward(event, state)
             elif isinstance(event, WinRon) and event.seat == actor:
-                immediate += event.score.ron_points * float(
-                    self._get("score_weight", 1.0)
-                )
+                points = event.score.ron_points * self._get("score_weight", 1.0)
+                seat_rewards[event.seat] += points
+                seat_rewards[event.from_seat] -= points
             elif isinstance(event, WinTsumo) and event.seat == actor:
-                immediate += event.score.tsumo_points * float(
-                    self._get("score_weight", 1.0)
+                weight = self._get("score_weight", 1.0)
+                main = float(event.score.cost.get("main", 0.0)) * weight
+                additional = (
+                    float(event.score.cost.get("additional", 0.0)) * weight
                 )
+                for seat in range(len(seat_rewards)):
+                    if seat == event.seat:
+                        continue
+                    payment = (
+                        main
+                        if event.seat == self._dealer_seat
+                        or seat == self._dealer_seat
+                        else additional
+                    )
+                    seat_rewards[seat] -= payment
+                    seat_rewards[event.seat] += payment
 
-        return RewardResult(reward=float(immediate), reward_update=float(reward_update))
+        return RewardResult(
+            reward=float(seat_rewards[actor]),
+            reward_update=float(reward_update),
+            seat_rewards=tuple(float(value) for value in seat_rewards),
+        )
+
+    def _confirmed_meld_reward(
+        self,
+        event: MeldMade,
+        state: Optional[GameState],
+    ) -> float:
+        if state is None or event.kind not in {"pon", "minkan", "ankan"}:
+            return 0.0
+        if not event.tiles34 or len(set(event.tiles34)) != 1:
+            return 0.0
+
+        tile34 = event.tiles34[0]
+        player_wind = state.players[event.seat].player_wind
+        confirmed_han = int(tile34 in DRAGONS)
+        confirmed_han += int(tile34 == player_wind)
+        confirmed_han += int(tile34 == self._round_wind)
+
+        reward = confirmed_han * self._get("reward_confirmed_yaku_han", 5.0)
+        return min(reward, self._get("reward_meld_cap", 20.0))
 
     def _project_discard(self, snapshot: Optional[DiscardSnapshot]) -> float:
         if snapshot is None:
@@ -115,8 +154,8 @@ class RewardProjector:
             and snapshot.available != memory.last_available
             and memory.last_shanten == snapshot.shanten
         ):
-            delta = memory.last_available - snapshot.available
-            if snapshot.available <= memory.last_available:
+            delta = snapshot.available - memory.last_available
+            if delta >= 0:
                 update += delta
             else:
                 update += delta * float(self._get("penalty_ava_num", 1.0))

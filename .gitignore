@@ -127,7 +127,7 @@ env/
 !tests/env/
 !src/env/
 venv/
-ENV/
+/ENV/
 env.bak/
 venv.bak/
 
@@ -172,3 +172,10 @@ runs/
 replay.json
 
 .vscode/
+/visualizer/build/
+
+# Local agent, IDE, and generated workspace state
+/.agents/
+/.vs/
+/skills-lock.json
+/mahjong_viz_demo.bmp
