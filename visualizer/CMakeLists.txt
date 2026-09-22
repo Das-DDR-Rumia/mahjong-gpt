@@ -8,7 +8,7 @@ add_library(mahjong_viz SHARED src/mahjong_viz.c)
 set_target_properties(mahjong_viz PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 target_include_directories(mahjong_viz PUBLIC include)
 target_compile_definitions(mahjong_viz PRIVATE UNICODE _UNICODE)
-target_link_libraries(mahjong_viz PUBLIC gdi32 user32)
+target_link_libraries(mahjong_viz PUBLIC gdi32 user32 bcrypt)
 
 add_executable(mahjong_viz_demo demo/demo.c)
 target_link_libraries(mahjong_viz_demo PRIVATE mahjong_viz)

@@ -13,6 +13,7 @@ static void fill_demo(MahjongVizFrame *frame) {
     int seat;
 
     mahjong_viz_frame_init(frame);
+    mahjong_viz_shuffle_table(frame, 0);
     frame->training_round = 1280;
     frame->average_reward = 42.75;
     frame->active_seat = 0;
@@ -24,6 +25,7 @@ static void fill_demo(MahjongVizFrame *frame) {
         frame->seats[seat].river_count = 12;
     }
     frame->seats[1].is_riichi = 1;
+    frame->seats[1].riichi_discard_index = 5;
     frame->seats[2].meld_count = 1;
     frame->seats[2].melds[0] = (MahjongVizMeld){{31, 31, 31, 0}, 3, 1};
     frame->seats[3].meld_count = 1;
@@ -32,6 +34,7 @@ static void fill_demo(MahjongVizFrame *frame) {
     frame->dora_indicators[0] = 3;
     frame->dora_indicators[1] = 29;
     frame->reward_event_count = 4;
+    frame->selected_reward_event = 3;
     frame->reward_events[0] = (MahjongVizRewardEvent){0, 6, 4.0, "ukeire +4"};
     frame->reward_events[1] = (MahjongVizRewardEvent){2, 37, 5.0, "yakuhai confirmed"};
     frame->reward_events[2] = (MahjongVizRewardEvent){1, 12, -3.6, "ukeire -3"};
@@ -46,9 +49,9 @@ int main(void) {
 
     fill_demo(&frame);
     if (!mahjong_viz_render_bmp(
-            "mahjong_viz_demo.bmp", &frame, 1280, 760, error, sizeof(error))) {
+            "mahjong_viz_demo.bmp", &frame, 1440, 900, error, sizeof(error))) {
         fprintf(stderr, "render failed: %s\n", error);
         return 1;
     }
-    return mahjong_viz_show_window("Mahjong-GPT Training", &frame, 1280, 760) ? 0 : 1;
+    return mahjong_viz_show_window("Mahjong-GPT Training", &frame, 1440, 900) ? 0 : 1;
 }
